@@ -32,26 +32,29 @@ S = 1/size(data, 1) * data'*data
 ϵ = 1e-4
 
 m = Model(optimizer)
-@variable(m, 1  <= o[i=1:length(vars)]                   <=length(vars), Int)
-@variable(m, 0. <= x[i=1:length(vars), j=1:length(vars)] <= 1.)
+@variable(m,  1  <= o[i=1:N]        <=N, Int)
+@variable(m, -1. <= x[i=1:N, j=1:N] <= 1.)
+@variable(m,  0. <= ξ[i=1:N, j=1:N] <= 1.)
 
 N = length(vars)
 target_idx = N
 @constraint(m, sum(x[N, :]) == 0)
 @constraint(m, [i=1:(N-1)], sum(x[i, :]) >= 1.)
 @constraint(m, [i=1:N], sum(x[i, i]) == 0.)
+@constraint(m, [i=1:N, j=1:N],  x[i, j] <= ξ[i, j])
+@constraint(m, [i=1:N, j=1:N], -ξ[i, j] <= x[i, j])
 
 
 for i in 1:N, j in (i+1):N
   add_disjunction!(m,
                @constraints(m, begin
-                              x[i, j] >= ϵ
+                              # x[i, j] >= ϵ
                               x[j, i] == 0
                               o[i]+1 <= o[j]
                           end),
                @constraints(m, begin
                               x[i, j] == 0
-                              x[j, i] >= ϵ
+                              # x[j, i] >= ϵ
                               o[i] >= o[j]+1
                           end),
                @constraints(m, begin
@@ -66,7 +69,7 @@ for i in 1:N, j in (i+1):N
 end
 
 λ = 0.1
-@objective(m, Min, 1//2*tr((I - x) * (I - x)' * S) + λ*sum(x))
+@objective(m, Min, 1//2*tr((I - x) * (I - x)' * S) + λ*sum(ξ))
 
 optimize!(m)
 
@@ -81,10 +84,12 @@ using Graphs, GraphPlot
 using Cairo, Compose
 using Colors
 
-begin
-  g = DiGraph(x_)
-  plt = gplot(g, nodelabel=getfield.(vars, :sym), nodelabelc=colorant"red")
-  draw(PNG("karate.png", 16cm, 16cm), plt)
-end
+g = DiGraph(x_)
+@assert !is_cyclic(g) && is_connected(g)
+plt = gplot(g, nodelabel=getfield.(vars, :sym),
+               nodelabelc=colorant"red",
+               edgelabel=[round(x_[e.src, e.dst], digits=2) for e in edges(g)],
+                edgelabelc=colorant"blue")
+draw(PNG("karate.png", 16cm, 16cm), plt)
 
 # draw(SVG("karate.svg", 16cm, 16cm), plt)
