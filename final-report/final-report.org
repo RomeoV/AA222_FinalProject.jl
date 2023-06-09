@@ -1,0 +1,341 @@
+# -*- org-latex-reference-command: "\\cref{%s}"; -*-
+#+title: AA222 Final Report: @@latex:\\@@ Bayesian Structure Learning and Causal Discovery Using Generalized Disjunctive Programming
+#+author: Romeo Valentin (/romeov@stanford.edu/)
+#+date: Spring 2023
+
+#+bibliography: /home/romeo/Zotero/zotero-bibliography.bib
+#+cite_export: csl
+#+options: toc:nil
+#+options: H:4
+# #+latex_class: article
+#+latex_header: \usepackage{geometry}
+#+latex_header: \usepackage{enumitem}
+#+latex_header: \usepackage[capitalize]{cleveref}
+#+latex_header: \usepackage{pdfpages}
+#+latex_header: \usepackage{subcaption}
+
+#+latex: \maketitle
+
+#+begin_abstract
+\noindent
+In this project we provide a new formulation for /Bayesian Network Discovery/, leveraging a novel formulation using /Generalized Disjunctive Programming/, and evaluating the formulation's efficacy.
+We present the assumptions, formulation, and implementation, and discuss performance results.
+We also comment on the relations to the more difficult problem of /Causal Structure Identification/ and show that under some assumptions our method recovers the correct causal graph.
+#+end_abstract
+
+* TODOs :noexport:
+** Method
+*** Implement max_num_parents
+For all \(i\), introduce a linear constraint \(\sum_{j \neq i}Y_{j\rightarrow i} \leq P_{\rm max}\)
+#+begin_src julia
+for i in 1:N
+    # recall that we have (i->j edge exists) <=> y_ij[1] = True for i < j
+    # and therefore       (j->i edge exists) <=> y_ji[2] = True for i > j
+    @constraint(m,
+        ( sum(m[Symbol("y_$(j)_$(i)")][2] for j in 1:i-1)
+        + sum(m[Symbol("y_$(i)_$(j)")][1] for j in i+1:N ) \leq P_max )
+end
+#+end_src
+** Experiments
+*** TODO [#A] Time w/ Gurobi
+**** Fails (OOM?) with medium problem and timelimit=2h
+**** DONE [#A] Write script to parse trace file
+*** TODO [#B] Time w/ Julia stack
+- conic solver and general NLP solver...
+*** TODO [#B] Time w/ BayesNets.jl
+- Baseline: K2 algorithm
+*** TODO [#B] Time w/ CausalityTools.jl
+- Baseline: PC algorithm
+*** TODO [#C] Adding causal information from variable correlations
+1. no correlation => no edge.
+2. X, Y (unconditionally) dependent <=> path from X=>Y or Y=>X or X<=Z=>Y
+** Writing
+*** Model assumptions <<sec:model-assumptions>>
+**** DAG
+**** Continuous vs discrete vs categorical data
+**** Linear model with Gaussian Noise vs Non-Gaussian Noise
+*** DONE Advantages
+- converges to proven optimum (for the optimization problem)
+- can observe exactly the optimality gap
+- can easily add logical constraints from knowledge
+- can use existing solvers (commercial or free)
+  + can also extend those if necessary
+  + can use extensive presolving
+  + can use efficient multithreading
+
+
+* Introduction
+Given a dataset of observations for a set of random variables, we may try to infer the probabilistic dependencies between the variables.
+For example, (i) we can try to predict the effects of a medicine on a patient given the patient's genetic information or current health condition; or (ii), a customer could try to infer the quality and subjective appeal of a wine bottle, given information about the wine's properties like age, pH value, and own preferences.
+
+Inferring such a graph, however, is generally non-trivial, and even shown to be NP-hard in the general case.
+Nonetheless, several optimization-based approaches exist; commonly either independence-based [cite:e.g.;@spirtesCausationPredictionSearch1993;@pearlCausality2009] or score-based [cite:e.g.;@heckermanLearningBayesianNetworks1995;@heckermanBayesianApproachCausal2006] algorithms are used.
+We also point to previous work in exact methods, based on Integer Programming; for instance [cite/t:@JMLR:v12:decampos11a].
+
+In this work, we propose a new formulation by combining ideas from Generalized Disjunctive Programming (GDP) with common problem formulations known from Integer Programming and Bayesian Network Discovery.
+We will see how the GDP formulation leads to a natural formulation of the required constraints, and further allows for further heuristics, like limiting the number of parents, to be encoded directly into the problem.
+The formulation can then be solved either directly, or by automatically reformulating it as a Mixed-Integer Non-linear Program (MINLP) and solving it with highly optimized, free or commercially available solvers.
+
+In order to set up the problem, we assume that the variable dependencies follow a sparse linear model with additive, non-Gaussian noise.
+We will see that this formulation allows us to obtain a relatively simple objective function, the minimization of which leads to the optimal structure.
+However, the optimization problem is constrained by integer and binary constraints, the number of which scales quadratically with the number of variables, but is constant with regard to the number of observations.
+
+*** Advantages.
+Advantages of exact solvers, rather than heuristics based ones, include that they are guaranteed to converge to the global optimum, and further continuously provide an estimate of the "optimality gap"; i.e. the gap between the best-found-solution (or "incumbent solution") and a lower bound that has been established.
+This allows practitioners to estimate at any time how much improvement could still be gained by running the program longer.
+
+The formulation as a GDP also allows for further logical constraints to be added easily.
+For example, if additional knowledge is available, or can be inferred through statistical (conditional) independence tests, it is straightforward to put additional constraints in the form of logical statements onto the disjuncts.
+Further, even if not discussed in this work, the GDP (or MINLP) formulation also allows for more complicated non-linear models, rather than simple additive noise models.
+Indeed, for a formulation \(y_i = f({Pa}(y_i)) + \delta\) where each variable is given by a /convex/ function \(f(\cdot)\) of it's parents \({Pa}(y_i)\), with additive noise, the formulation can still provide relatively fast results, with little change to the formulation or optimization setup necessary.
+
+Finally, since it is possible to automatically convert any GDP formulation to a MINLP formulation, a wide variety of solvers can be applied directly, including highly-optimized multi-threaded commercial solvers.[fn:2]
+Alternatively, custom solvers can be used and easily extended with heuristics suitable for the concrete problem setup.
+** Mixed-Integer (Non-)Linear Programming and Generalized Disjunctive Programming :noexport:
+- MI(N)LP generally solves problems of the form
+\begin{equation} \begin{aligned}
+& \min_{x,z} f(x,z)\\
+\text{s.t. }& h(x,z) = 0\\
+& g(x,z) \leq 0\\
+& x \in \mathbb{R}^n, z \in \mathbb{Z}^m
+\end{aligned} \end{equation}
+- we consider in particular the case of a /convex/ MINLP
+- note however, that any non-trivial integer program is non-convex by definition, due to the integrality constraints
+
+- GDP is a related problem formulation that solves problems of the form
+\begin{equation} \begin{aligned}
+& \min_{x \in \mathbb{R}^n} f(x)\\
+\text{s.t. }& g(x) \leq 0 \\
+& \bigvee_{j \in J_k} \begin{bmatrix} Y_{ik} \\ h_{ik}(x) \leq 0 \end{bmatrix}, \qquad \forall k \in K \\
+& \Omega(Y) = \mathit{true} \\
+& x \in X \subseteq \mathbb{R}^n \\
+& Y_{ik} \in \left\{ \mathit{true}, \mathit{false} \right\}\quad \forall i \in J_k, k \in K
+\end{aligned} \end{equation}
+- GDP problems can be turned into MINLP problems using Big-M or Hull relaxation, however they also allow for additional logic-based constraints.
+
+** Bayesian Network and Causal Structure Discovery :noexport:
+- Given a set of variables with observations, one may try to understand the graphical relations between variables.
+- such relations can be modeled as Bayesian Networks.
+- The quality, in some sense, of a proposed network structure can e.g. be computed through the Bayesian Information Criterion.
+- However, BN have two downsides:
+  1. They do not consider the causal direction of variables. In fact, two Bayesian Networks can have the same score even though the causal directions are only correct in one of them.
+  2. They can not add possible hidden latent variables.
+- The problem of causal discovery is generally a hard one, however several methods have been proposed.
+- These methods generally fall into two categories:
+  1. score-based methods
+  2. constraint-based methods.
+  Similarly, [cite/t:@manzourIntegerProgrammingLearning2019] formulate a similar loss function, again with a quadratic term for the data likelihood, a penalization term, and a DAG constraint.
+  In this work, they further introduce a set of integer constraints that induce a /topological ordering/ on the nodes, i.e. any pair of nodes must have an order, and there may be no cycles.
+
+** Contributions
+In this project, we make the following contributions:
+# ,itemsep=-0.5ex,topsep=]
+#+attr_latex: :options [label=\Roman*.]
+1. Explore how topological graph constraints can be rewritten using the GDP formulation;
+2. Introduce a new formulation for finding Bayesian Network Structures given data, and discuss connections to finding Causal Graph Structures; and
+3. Showcase the efficacy of the method on two simple datasets.
+Accompanying code, including an implementation of the model, is provided at [[https://github.com/RomeoV/AA222_FinalProject.jl]].
+
+* Mathematical Background <<sec:review>>
+*** Bayesian Networks and Bayesian Network Discovery.
+/Bayesian Networks/ try to model the statistical relations of observational variables.
+In particular, given observational data with multiple variables, we can try to infer new predictions by /factorizing/ the structure and finding sparse probabilitic relations between different variables.
+/Bayesian Network Discovery/ then specifically deals with the problem of finding such a sparse, factorized representation given data.
+In this setting, an algorithm considers different possible (directed) dependencies between variables, and ranks them according to a /score/, e.g. the Bayesian Information Criterion [cite:@schwarzEstimatingDimensionModel1978], or by considering constraint violations [cite:@spirtesCausationPredictionSearch1993, see e.g. PC-Algorithm].
+
+Many specific formulations of this problem exist, but we will consider the formulation given by [cite:@zhengDAGsNOTEARS2018], which consists of a continuous convex term representing the data likelihood, a convex regularization term, and a topological constraint
+\begin{equation}
+\min_{X_{ij}} \frac{1}{2} \mathit{tr}\left\{ (I - X) (I - X)^\intercal S \right\} + \lambda \cdot \phi(X)
+\end{equation}
+where \(X\) represents the edge weights of the implied Bayesian Network graph, which must be directed and acyclic, and  \(S\) is given by the data.
+\(\phi(X)\) is a regularization term which may be used to induce sparsity.
+The Directed-Acyclic-Graph (DAG) constraint is generally non-trivial to deal with; [cite/t:@manzourIntegerProgrammingLearning2019] propose different techniques from Integer Programming, specifically cutting planes, linear ordering, and topological ordering.
+[cite/t:@zhangTruncatedMatrixPower2022] instead propose reformulating the DAG-constraint as the trace of a matrix-exponential, and approximating it using a truncated power iteration, which can then be numerically optimized.
+In the following, we will propose a new way to deal with this constraint, by using Generalized Disjunctive Programming.
+
+
+*** Mixed-Integer and Generalized Disjunctive Programming.
+Mixed-Integer Non-Linear Programming (MINLP) is a widely-applicable problem formulation, in which a known objective function is to be minimized using a set of continuous and discrete variables, which are subject to a series of known constraints.
+If the objective function and constraints are convex, there exist efficient algorithms to solve such problems, which have successfully been applied to problems with thousands of variables [cite:@grossmannSystematicModelingDiscretecontinuous2013; @duranOuterapproximationAlgorithmClass1986].
+
+However, writing a problem in a MINLP formulation can be a non-trivial task, and often may loose some structure which could otherwise be used to solve the problem more efficiently.
+To this end, the related paradigm of /(Generalized) Disjunctive Programming/ (GDP) has been introduced [cite:@bergaminiLogicbasedOuterApproximation2005; @trespalaciosReviewMixedIntegerNonlinear2014; @grossmannGeneralizedDisjunctiveProgramming2012; @balasDisjunctiveProgramming1979], which allows to encode the notion of /choices/ as well as logical constraints directly, directly using so called Disjunctive Constraints.
+Disjunctive Constraints can be thought of as "either-or" constraints, where we must choose to either abide by constraint-set A or constraint-set B.
+In [[sec:mathematical-formulation]] we will see how the GDP formulation can be used as a powerful yet simple framework to encode complicated relationships and constraints.
+Finally, we note that any GDP can be automatically reformulated as a MINLP problem.
+However sometimes it is also possible to exploit the GDP structure directly to improve the efficiency of the optimization algorithms.
+
+# In this proposal, we aim to apply GDP methods to Bayesian Network Discovery, and, if time permits, even some Causal Discovery algorithms.
+# In particular, we aim to investigate the topological ordering constraints introduced by [cite/t:@manzourIntegerProgrammingLearning2019] and rewrite them using the GDP formulation.
+# Then, we investigate whether Logic-based Cutting Planes [cite:@bergaminiLogicbasedOuterApproximation2005] can be used to improve the optimization algorithm.
+# We aim to provide a basic theoretical analysis, reference code leveraging the \texttt{DisjunctiveProgramming.jl} library [cite:@perezDisjunctiveProgrammingJlGeneralized2023], and a set of experiments.
+# \[ \min_{B \in \mathbb{R}^{d \times d}} \| X - X B \|_F^2 + \eta \|B\|_1, \qquad \text{subject to } \textit{isDAG(B)}.\]
+
+
+
+* Mathematical Formulation <<sec:mathematical-formulation>>
+In this section, we first discuss the underlying assumptions of our model, as well as the implications on the identifiability of a causal graph structure.
+Then, we show how we can use Generalized Disjunctive Programming (GDP) to encoder the assumptions and constraints that we are making into a standardized formulation.
+Finally, we put together the whole model and briefly discuss the steps necessary to solve the problem.
+
+** Mathematical assumptions and implications  <<sec:model-assumptions>>
+In order to find an underlying structure to our data, we first state and justify some assumptions.
+We model our data naively as a linear model with additive noise
+\[
+\mathcal{D} = \mathcal{X}\mathcal{D} + \Delta.
+\]
+Although this model may often not be accurate, we argue that it provides a reasonable first approximation for many relations in the real world.
+It also significantly reduces the complexity of the optimization problem, and provides certain identifiability results discussed in the next section.
+However, we also note that more complicated models are compatible with our algorithm, however are not discussed here.
+
+We further assume that there exists an acyclic relationship between the variables.
+Cyclic probabilistic models can, for example, be used to model states which are in equilibrium; however we do not consider those here.
+Finally, we assume that our graphical structure is sparse, and further introduce a heuristic to directly limit the number of parents for any variable.
+
+*** Implications on causality and causal identifiability
+We briefly comment on some "stronger" properties of our problem setup beyond Bayesian Network Structures, namely Causal Network Structures.
+Causal Network Structures are similar to Bayesian Network Structures, but have edges oriented in the "correct" way in the sense that intervening on a variable by drawing it from a new distribution still allows probabilistically correct inference.
+Wrong model assumptions, and hidden confounding variables, may however still be present.
+
+We first note that, in general, linear model with Gaussian noise are non-identifiable [cite:@petersElementsCausalInference2017;, Thm 4.2] in the sense that the correct causal directions can not be concluded from observational data, even in the limit of infinite data.
+However, the linear structure makes it identifiable in "almost every other case", e.g. with non-Gaussian noise, or noise with equal variance.
+We argue that for many problems the noise is indeed not Gaussian.
+
+We further note that minimization of a consistent loss function[fn:1], like the Bayesian Information Criterion, together with the identifyability assumption discussed above, guarantees that the true causal model will be found upon convergence, given that the model assumptions hold, and in the limit of infinite data.
+We consider this an additional strong motivation for our approach, since we can guarantee convergence to a globally optimal solution, given enough time.
+However, these insights also leads us to the following intuition:
+Fundamentally, convergence to the true result is limited by the "degree of identifiability", which loosely relates to how large the class of graph structures is that could have generated the data, and which "collapses" fully in the limit of perfectly Gaussian noise.
+Therefore, this also limits how fast our search algorithm (or any algorithm) can converge, which in general means that we can not expect particularly fast convergence, even for a small number of variables.
+
+** Using Disjunctive Programming to encode assumptions and constraints
+We will now describe how the different components described in the previous section can be naturally formulated using the tools of Generalized Disjunctive Programming.
+*** Encoding the DAG constraint.  <<sec:encoding-dag-constraint>>
+We use a disjunctive formulation together with an integer-valued topological-ordering constraint to encode the directed-acyclic-graph (DAG) assumption ([[sec:model-assumptions]]).
+For that, notice that for any pair of variables \((i, j)\), one of the following statements is always true:
+1. There is a path from variable \(i\) to \(j\);
+2. there is a path from variable \(j\) to \(i\); or
+3. there is no path in either direction.
+For the first case, we can not necessarily imply that \(x_{ij} \neq 0\), however we can imply that \(x_{ji} = 0\) and that \(o_i < o_j\), where \(o \in \left\{ 1, \dots, N \right\}\) denotes the topological ordering of the variables.
+The inverse conclusion holds for the second case.
+For the third case, we can only conclude \(x_{ij} = x_{ji} = 0\), however put no restrictions on \(o_i\) and \(o_j\).
+We can therefore encode the DAG constraint by adding the disjuncts
+#+name: eq:dag-disjuncts
+\begin{equation}
+\begin{bmatrix}
+Y^{(1)}_{ij} \\
+x_{ji} = 0 \\
+o_i < o_j
+\end{bmatrix} \veebar
+\begin{bmatrix}
+Y^{(2)}_{ij} \\
+x_{ij} = 0 \\
+o_j < o_i
+\end{bmatrix} \veebar
+\begin{bmatrix}
+Y^{(3)}_{ij} \\
+x_{ij} = 0 \\
+x_{ji} = 0
+\end{bmatrix}
+\end{equation}
+for each unique pair \(i \neq j\), i.e. \(\forall i \in \left\{ 1, \dots, N \right\}, j \in \left\{ i+1, \dots, N \right\}\), where \(\veebar\) denotes an exclusive-or relationship between the binary variables \(Y^1_{ij}\),\(Y^2_{ij}\) and \(Y^3_{ij}\).
+For notational convenience, we extend the definition of \(Y^{(k)}_{ij}\) to \(\mathcal{I}^2\) by further defining \(Y^{(1)}_{ji} = Y^{(2)}_{ij}\) and \(Y^{(3)}_{ji} = Y^{(3)}_{ij}\).
+
+*** Constraining the number of parent nodes.
+Reducing the maximum number of parent nodes for any variable is a common way to reduce the size of the search space.
+Using the disjunctive formulation from [[eq:dag-disjuncts]], we can add this constraint in a natural way:
+Let \(P_{\rm max}\) be the maximum number of parent nodes.
+Then, we can simply add \(N\) constraints
+#+name: eq:max-parents
+\begin{equation}
+\sum_{i \neq j} Y^{(1)}_{ij} \leq P_{\rm max}
+\end{equation}
+with fixed \(j \in \left\{ 1, \dots, N \right\}\).
+
+# [fn:1] Due to the choice of representing each pair \((i, j)\) only once with \(i < j\) (see [[sec:encoding-dag-constraint]]) in the implementation we need to split this constraint into \(\sum_{i<j} Y^{(1)}_{ij} + \sum_{i>j} Y^{(2)}_{ji} \leq P_{\rm max}\).
+
+*** Adding further external knowledge.
+Using the disjuncts from [[eq:dag-disjuncts]], we can also add further knowledge, for example from external insights, or derived from statistical properties about the data.
+For instance, we can fix a variable \(i\) as a "sink" node (i.e. the result of a causal process) by allowing no out edges (\(Y_{ij}^{(1)} = 0 \quad \forall j \)), or similarly as a "root" node (\(Y_{ji}^{(1)} = 0 \quad \forall j\)), and can also force the graph to be fully connected (\(\sum_j Y^{(1)}_{ij} + Y^{(1)}_{ji} \geq 1 \quad \forall i \in \mathcal{I}\)).
+
+*** Encoding the penalty function.
+We can rewrite both the \(L_1\)- and the \(L_\infty\)-penalties as linear objectives.
+For the \(L_\infty\)-penalty, i.e. \(\phi(x) = \|x\|_\infty = \max_{ij} x_{ij}\),
+we can introduce a single auxiliary variable \(\xi_\infty > 0\) and constraints
+\begin{equation}
+-\xi \leq x_{ij} \leq \xi
+\end{equation}
+for all \((i, j)\) in \(\mathcal{I}^2\), and add \(\lambda \cdot \xi\) to the objective function.
+Similarly, for the \(L_1\)-penalty, i.e. \(\phi(x) = \sum_{ij} |x_{ij}|\), we introduce a new auxiliary variable \(\xi_{ij} > 0\), introduce constraints
+\begin{equation}
+-\xi_{ij} \leq x_{ij} \leq \xi_{ij}
+\end{equation}
+and add \(\lambda \cdot \sum_{ij}\xi_{ij}\) to the objective function.
+Finally, a \(L_2\)-penalty may be added without reformulation, i.e. by simply adding \(\lambda \cdot \sum_{ij} x_{ij}^2\) to the objective function.
+
+** Resulting problem formulation as Generalized Disjunctive Program
+Using the results from the previous sections, we propose the following mathematical formulation for the Bayesian Network Discover Task.
+Let \(D \in \mathbb{R}^{M \times N}\) be the dataset of \(M\) observations and dimensionality \(N\), and let \(S = \frac{1}{M}D^\intercal D\).
+Further, let \(\mathcal{I} = \left\{ 1, \dots, N \right\}\) be the index set of variables, and let \(\tilde{\mathcal{I}}^2\) be the set of unique index pairs, i.e. \(\left\{ (i, j) : i \in \mathcal{I}, j \in \left\{ i+1, \dots, N \right\} \right\}\).
+Then, formulate the problem as
+#+name: eq:whole-formulation
+\begin{equation}
+\begin{aligned}
+\min_{X} &\frac{1}{2} \left\{ (I-X) (I-X)^\intercal S \right\} + \lambda \cdot \sum_{ij} \xi_{ij} & \\
+& \begin{bmatrix} Y_{ij}^{(1)} \\ x_{ji} = 0 \\ o_i < o_j \end{bmatrix} \veebar
+  \begin{bmatrix} Y_{ij}^{(2)} \\ x_{ij} = 0 \\ o_i > o_j \end{bmatrix} \veebar
+  \begin{bmatrix} Y_{ij}^{(3)} \\ x_{ij} = 0 \\ x_{j, i} = 0  \end{bmatrix} & \forall (i, j) \in \tilde{\mathcal{I}}^2 \\
+&Y_{i, i}^{(3)} = 1 & \forall i \in \mathcal{I}\\
+&\sum_{j\in \mathcal{I}} Y_{ij}^{(1)} + \sum_{j \in \mathcal{I}} Y_{j,i}^{(2)} \geq 1 & \forall i \in \mathcal{I}\\
+&\sum_{i \neq j} Y^{(1)}_{ij} \leq P_{\rm max} & \forall j \in \mathcal{I}\\
+& -\xi_{ij} \leq x_{ij} \leq \xi_{ij} & \forall (i,j) \in \mathcal{I}^2\\
+& o_i \in \mathcal{I}  & \forall i \in \mathcal{I}\\
+& \xi_{i, j} \in [0, \max(|\underline{x}|,|\bar{x}|)] & \forall (i,j) \in \mathcal{I}^2\\
+& x_{i, j} \in [\underline{x}, \bar{x}] & \forall (i,j) \in \mathcal{I}^2.
+\end{aligned}
+\end{equation}
+with a slight abuse of notation for \(Y_{j,i}\) as introduced in [[sec:encoding-dag-constraint]], where the parameters \(x_{ij}\) are bounded by \(\underline{x}\) and \(\bar{x}\) and the number of parents per node is bound by \(P_{\rm max}\).
+
+
+* Experimental Results
+We apply the formulation introduced in the previous section to two datasets; one with 8 and one with 12 variables, and show convergence plots over time for each.
+Then, we apply the formulation to a large dataset with 50 variables and report time until a "reasonable" solution has been found.
+
+The model is implemented using the /JuMP.jl/ library[fn:3], additionally leveraging the /DisjunctiveProgramming.jl/ library[fn:4] to implement and reformulate the disjuncts.
+We use the BigM method with \(M = 10\) for reformulation to the MINLP, which slightly outperformed the Hull reformulation method.
+Variable upper and lower bounds are chosen as \((-10, 10)\), we regularize the parameters with the \(L_1\)-penalty and a factor of \(\lambda=0.1\).
+We use the Gurobi solver[fn:5] to solve the resulting MINLP problem, and have run the experiments on a 11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz with 16 threads and 32GiB of RAM.
+
+#+latex: \input{fig.tex}
+
+\cref{fig:convergence} shows the convergence results of the formulation on the two datasets, with different choices of regularization and maximum number of parents.
+We can see that the small problem is solved to optimality after approximately 60 seconds, regardless of the parameter choices.
+Interestingly, we can observe that the setting with a large number of parents converges fastest; however this is not reproduced for the medium dataset.
+Further, we can observe on both datasets that \(L_1\)-regularization outperforms the others.
+For the medium dataset, we can see that a reasonable initial result is achieved quickly, however further convergence is slow.
+Finally, for the large dataset, an initial feasible solution is found after 30 seconds, and the convergence curve flattens out after about 60 seconds, with an optimality gap of 14%.
+
+
+* Outlook and Discussion
+We have seen that Bayesian Structure Learning can be formulated using tools from Generalized Disjuncive Programming and solved using established MINLP methods.
+Under some assumptions, we have also argued that not only a Bayesian Network can be found, but indeed the correct Causal Structure will be recovered; however the problem is computationally ill-posed without further restrictions.
+Nonetheless, reasonable solutions can be found in relatively short time, even for problems with a larger amount of variables (\(\approx 50\)).
+
+In the future, we propose investigating extending the formulation beyond linear models, and evaluating both theoretical and performance results.
+Further, statistical tests can provide (conditional) independence tests before any structure fitting, which may be included as constraints to the formulation.
+\newpage \appendix
+
+* Bibliography
+:PROPERTIES:
+:unnumbered: t
+:END:
+#+print_bibliography:
+
+* Footnotes
+
+[fn:5]\url{https://gurobi.com}
+[fn:4]\url{https://github.com/hdavid16/DisjunctiveProgramming.jl}
+
+[fn:3]\url{https://jump.dev}
+[fn:2]We are using the Gurobi solver (\url{https://gurobi.com}), which provides free licenses for academic use.
+
+[fn:1]Consistency here is used in the sense that minimizing a loss function yields the optimal result for an underlying search problem.
