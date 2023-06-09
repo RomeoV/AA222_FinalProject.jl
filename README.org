@@ -1,0 +1,24 @@
+* AA222 project: Bayesian Structure Learning and Causal Discovery Using Generalized Disjunctive Programming
+
+#+begin_quote
+In this project we provide a new formulation for Bayesian Network Discovery, leverag ing
+a novel formulation using Generalized Disjunctive Programming, and evaluating the
+formulation’s efficacy. We present the assumptions, formulation, and implementation,
+and discuss performance results. We also comment on the relations to the more difficult
+problem of Causal Structure Identification and show that under some assumptions our
+method recovers the correct causal graph.
+#+end_quote
+Find the full report [[final-report/final-report.pdf][here]].
+
+*** TLDR: The problem formulation as GDP
+We assume a linear model with non-Gaussian noise (required for identifiability).
+The edge weights between variables are given as $X$, and the data is used to construct $S$. Then we formulate the problem as:
+:PROPERTIES:
+:DIR:      ~/Documents/Stanford/AA222/FinalProject.jl/figs/
+:END:
+#+attr_org: :width 400
+[[file:figs/formulation.png]]
+
+*** TLDR: A recovered Bayesian Network
+A Bayesian Network predicting a passengers survival rate on the titanic.
+[[file:figs/karate.png]]
