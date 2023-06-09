@@ -16,19 +16,19 @@ hypatia = optimizer_with_attributes(Hypatia.Optimizer, MOI.Silent() => true)
 gurobi = Gurobi.Optimizer
 
 
-# optimizer = optimizer_with_attributes(
-#         Juniper.Optimizer,
-#         "nl_solver" => ipopt,
-#         "mip_solver" => highs,
-#         "rel_gap" => 1e-4,
-#     )
-
-optimizer =  optimizer_with_attributes(
-        Pavito.Optimizer,
+optimizer = optimizer_with_attributes(
+        Juniper.Optimizer,
+        "nl_solver" => ipopt,
         "mip_solver" => highs,
-        "cont_solver" => ipopt,
-        "rel_gap" => 1e-4,
     )
+
+
+
+optimizer = optimizer_with_attributes(
+                Gurobi.Optimizer,
+                "timelimit" => 30,
+                "LogFile" => "/tmp/foo.log",
+      )
 
 optimizer = optimizer_with_attributes(
           Pajarito.Optimizer,
@@ -37,13 +37,25 @@ optimizer = optimizer_with_attributes(
           # "rel_gap" => 1e-4,
       )
 
-optimizer = optimizer_with_attributes(
-                Gurobi.Optimizer,
-                "timelimit" => 30,
-                "LogFile" => "/tmp/foo.log",
-      )
+optimizer =  optimizer_with_attributes(
+        Pavito.Optimizer,
+        "mip_solver" => highs,
+        "cont_solver" => ipopt,
+        "rel_gap" => 1e-4,
+    )
 
-m = setup_model(optimizer)
+vars, data = read_input("data/small.csv")
+m = setup_model(optimizer, data)
+
+# N = length(vars)
+# set_start_value.(m[:x], 0)
+# for (i, o_) in enumerate(m[:o])
+#   set_start_value(o_, i)
+# end
+# for i in 1:N-1
+#   set_start_value.(m[Symbol("y_$(i)_$(i+1)")], [1, 0, 0])
+# end
+
 optimize!(m)
 ## PROCESS SOLUTION
 

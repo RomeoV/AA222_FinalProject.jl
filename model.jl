@@ -1,14 +1,14 @@
 using LinearAlgebra
 include("src/data_wranglage.jl")
-function setup_model(optimizer, data;
+function setup_model(data;
     max_parents::Union{Nothing, Int}=nothing,
-    penalty::Float64=0.1,
+    penalty_fct::Float64=0.1,
     penalty_type::Symbol=:L1,
     reformulation=:big_m)
-  λ=penalty
   @assert penalty_type ∈ [:L1, :L2, :Linf]
+  λ = penalty_fct # just an alias
 
-  m = Model(optimizer)
+  m = Model()
 
   n_samples, N = size(data)
   target_idx = N
@@ -16,8 +16,9 @@ function setup_model(optimizer, data;
   S = 1/n_samples * data'*data
 
   ϵ = 1e-4
-  x_hi, x_lo = 10., -10.
+  x_lo, x_hi = -10., +10.
 
+  ## define vars
   @variable(m,   1  <= o[i=1:N]        <= N, Int)  # maybe don't make integer
   @variable(m, x_lo <= x[i=1:N, j=1:N] <= x_hi)
   if penalty_type == :L1
@@ -26,6 +27,7 @@ function setup_model(optimizer, data;
     @variable(m,   0. <= ξ <= x_hi)
   end
 
+  ## define basic constraints
   @constraint(m, sum(x[N, :]) == 0)  # target node no out edges
   @constraint(m, [i=1:(N-1)], sum(x[i, :]) >= ϵ)  # non-target-node some out edges
   @constraint(m, [i=1:N], sum(x[i, i]) == 0.)  # no self-connections
@@ -38,6 +40,7 @@ function setup_model(optimizer, data;
     @constraint(m, [i=1:N, j=1:N], -ξ <= x[i, j])
   end
 
+  ## add DAG disjunctions
   for i in 1:N, j in (i+1):N
     add_disjunction!(m,
                  @constraints(m, begin
@@ -56,21 +59,26 @@ function setup_model(optimizer, data;
                             end),
                  reformulation=reformulation,
                  M=100.,
-                 name=Symbol("Y_$(i)_$(j)")
+                 name=Symbol("y_$(i)_$(j)")
     )
-    choose!(m, 1, m[Symbol("Y_$(i)_$(j)")]...;
+    choose!(m, 1, m[Symbol("y_$(i)_$(j)")]...;
             mode = :exactly, name = "XOR_$(i)_$(j)") #XOR constraint
   end
 
+  # define alias
+  @variable(m, Y[i=1:N, j=1:N], Bin)
+  @constraint(m, [i=1:N], Y[i, i] == 0)
+  @constraint(m, [i=1:N, j=i+1:N], Y[i, j] == m[Symbol("y_$(i)_$(j)")][1])
+  @constraint(m, [i=1:N, j=1:i-1], Y[i, j] == m[Symbol("y_$(j)_$(i)")][2])
+
+
+  ## add max_parents constraints
   if !isnothing(max_parents)
-    # recall that we have (i->j edge exists) <=> y_ij[1] = True for i < j
-    # and therefore       (j->i edge exists) <=> y_ji[2] = True for i > j
-    @constraint(m, [j=1:N], ( 
-            sum(var"Y_$(i)_$(j)"[1] for i in 1:j-1)
-          + sum(var"Y_$(j)_$(i)"[2] for i in j+1:N)
-        ) ≤ max_parents
-    )
+    @constraint(m, [j=1:N],  sum(Y[:, j]) ≤ max_parents)
   end
+
+  ## make sure graph is fully connected
+  @constraint(m, [i=2:N], sum(Y[:, i]) + sum(Y[i, :]) ≥ 1)
 
   @objective(m, Min, 1/2*tr((I - x) * (I - x)' * S) + 
              @match penalty_type begin

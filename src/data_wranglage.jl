@@ -2,7 +2,7 @@
 import CSV: read
 import DataFrames: DataFrame
 
-Domain_t = UInt8  # for variable assignments
+Domain_t = Int  # for variable assignments
 struct Variable
   sym :: Symbol
   domain :: Domain_t
@@ -21,6 +21,6 @@ function read_input(filepath::String = "data/small.csv")
   data = read(filepath , DataFrame)
   vars = build_variables(data)
   # permutedims is non-lazy transpose
-  data_mat = Matrix{Domain_t}(data) |> permutedims 
+  data_mat = Matrix{Domain_t}(data)
   return vars, data_mat
 end
